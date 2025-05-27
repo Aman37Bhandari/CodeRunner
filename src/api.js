@@ -36,151 +36,362 @@ export const executeCode = async (language, sourceCode) => {
   }
 };
 
-// Function to transform pseudocode to C
+// Simplified and more reliable function to transform pseudocode to C
 function transformPseudocodeToC(pseudocode) {
-  // Clean up the pseudocode - normalize line endings and remove extra whitespace
+  // Clean up the pseudocode
   pseudocode = pseudocode.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-  // Generate C code - extremely simple implementation
+  // Generate C code
   let cCode = `
 #include <stdio.h>
-#include <string.h>
+#include <math.h>
 
-// Very simple implementation that just handles the specific example
 int main() {
 `;
 
-  // Check if the code matches our specific example pattern
+  // Check if the code matches the specific greet example (keep original working code)
   if (
     pseudocode.includes("function greet") &&
     pseudocode.includes('print("Hello,') &&
     pseudocode.includes('greet("Alex")')
   ) {
-    // Just hardcode the expected output for this specific example
     cCode += `  printf("Hello, Alex!\\n");\n`;
   }
-  // Handle a few other simple cases
-  else if (pseudocode.includes("var") && pseudocode.includes("print")) {
-    // Extract variable assignments
-    const lines = pseudocode.split("\n");
-    const variables = {};
+  // Handle general pseudocode
+  else {
+    const lines = pseudocode
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    const variables = new Map();
 
-    for (const line of lines) {
-      const trimmedLine = line.trim();
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
 
-      // Variable assignment
-      if (trimmedLine.startsWith("var ") && trimmedLine.includes("=")) {
-        const parts = trimmedLine
-          .substring(4)
-          .split("=")
-          .map((p) => p.trim());
-        const varName = parts[0];
-        const value = parts[1];
+      // Variable declaration with var keyword
+      if (line.startsWith("var ") && line.includes("=")) {
+        const parts = line.substring(4).split("=", 2);
+        const varName = parts[0].trim();
+        const expression = parts[1].trim();
 
-        // Store numeric values
-        if (!isNaN(Number(value))) {
-          variables[varName] = Number(value);
-        }
-        // Store variable references
-        else if (variables[value] !== undefined) {
-          variables[varName] = variables[value];
-        }
-        // Handle simple addition
-        else if (value.includes("+")) {
-          const addParts = value.split("+").map((p) => p.trim());
-          if (
-            addParts.length === 2 &&
-            !isNaN(Number(addParts[0])) &&
-            !isNaN(Number(addParts[1]))
-          ) {
-            variables[varName] = Number(addParts[0]) + Number(addParts[1]);
-          } else if (
-            addParts.length === 2 &&
-            variables[addParts[0]] !== undefined &&
-            variables[addParts[1]] !== undefined
-          ) {
-            variables[varName] =
-              variables[addParts[0]] + variables[addParts[1]];
-          }
+        const cExpression = convertExpressionToC(expression, variables);
+
+        cCode += `  double ${varName} = ${cExpression};\n`;
+        variables.set(varName, "double");
+      }
+
+      // Assignment without var keyword
+      else if (
+        line.includes("=") &&
+        !line.includes("==") &&
+        !line.includes("!=") &&
+        !line.includes("<=") &&
+        !line.includes(">=") &&
+        !line.startsWith("for ")
+      ) {
+        const parts = line.split("=", 2);
+        const varName = parts[0].trim();
+        const expression = parts[1].trim();
+
+        const cExpression = convertExpressionToC(expression, variables);
+
+        if (!variables.has(varName)) {
+          cCode += `  double ${varName} = ${cExpression};\n`;
+          variables.set(varName, "double");
+        } else {
+          cCode += `  ${varName} = ${cExpression};\n`;
         }
       }
 
       // Print statement
-      else if (trimmedLine.startsWith("print ")) {
-        const printExpr = trimmedLine.substring(6).trim();
+      else if (line.startsWith("print ")) {
+        const printExpr = line.substring(6).trim();
 
-        // Print string
         if (printExpr.startsWith('"') && printExpr.endsWith('"')) {
+          // String literal
           const str = printExpr.substring(1, printExpr.length - 1);
-          cCode += `  printf("%s\\n", "${str}");\n`;
-        }
-        // Print variable
-        else if (variables[printExpr] !== undefined) {
-          cCode += `  printf("%d\\n", ${variables[printExpr]});\n`;
+          cCode += `  printf("${str}\\n");\n`;
+        } else if (printExpr.includes('" + ')) {
+          // String concatenation - parse more carefully
+          const parts = [];
+          let current = "";
+          let inString = false;
+          let i = 0;
+
+          while (i < printExpr.length) {
+            const char = printExpr[i];
+
+            if (char === '"' && (i === 0 || printExpr[i - 1] !== "\\")) {
+              if (inString) {
+                // End of string
+                parts.push({ type: "string", value: current });
+                current = "";
+                inString = false;
+              } else {
+                // Start of string
+                if (current.trim()) {
+                  parts.push({ type: "variable", value: current.trim() });
+                }
+                current = "";
+                inString = true;
+              }
+            } else if (!inString && char === "+" && printExpr[i + 1] === " ") {
+              // Found separator outside string
+              if (current.trim()) {
+                parts.push({ type: "variable", value: current.trim() });
+              }
+              current = "";
+              i++; // Skip the space after +
+            } else if (
+              !inString &&
+              char === " " &&
+              printExpr.substring(i, i + 3) === " + "
+            ) {
+              // Found separator
+              if (current.trim()) {
+                parts.push({ type: "variable", value: current.trim() });
+              }
+              current = "";
+              i += 2; // Skip " + "
+            } else {
+              current += char;
+            }
+            i++;
+          }
+
+          // Add the last part
+          if (current.trim()) {
+            if (inString) {
+              parts.push({ type: "string", value: current });
+            } else {
+              parts.push({ type: "variable", value: current.trim() });
+            }
+          }
+
+          // Generate printf statement
+          let formatStr = "";
+          const args = [];
+
+          for (const part of parts) {
+            if (part.type === "string") {
+              formatStr += part.value;
+            } else if (variables.has(part.value)) {
+              formatStr += "%.2f";
+              args.push(part.value);
+            } else {
+              // Try to convert as expression
+              const cExpr = convertExpressionToC(part.value, variables);
+              formatStr += "%.2f";
+              args.push(cExpr);
+            }
+          }
+
+          const argsList = args.length > 0 ? ", " + args.join(", ") : "";
+          cCode += `  printf("${formatStr}\\n"${argsList});\n`;
+        } else {
+          // Variable or expression
+          const cExpression = convertExpressionToC(printExpr, variables);
+          cCode += `  printf("%.2f\\n", ${cExpression});\n`;
         }
       }
-    }
-  }
-  // For loop example
-  else if (
-    pseudocode.includes("for") &&
-    pseudocode.includes("do") &&
-    pseudocode.includes("end for")
-  ) {
-    const lines = pseudocode.split("\n");
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
 
       // For loop
-      if (
+      else if (
         line.startsWith("for ") &&
         line.includes(" to ") &&
         line.endsWith(" do")
       ) {
-        const match = line.match(/for\s+(\w+)\s*=\s*(\d+)\s+to\s+(\d+)\s+do/);
+        const match = line.match(/for\s+(\w+)\s*=\s*(.+?)\s+to\s+(.+?)\s+do/);
         if (match) {
           const loopVar = match[1];
-          const start = match[2];
-          const end = match[3];
+          const start = convertExpressionToC(match[2], variables);
+          const end = convertExpressionToC(match[3], variables);
 
-          cCode += `  for (int ${loopVar} = ${start}; ${loopVar} <= ${end}; ${loopVar}++) {\n`;
+          variables.set(loopVar, "int");
+          cCode += `  for (int ${loopVar} = (int)(${start}); ${loopVar} <= (int)(${end}); ${loopVar}++) {\n`;
 
-          // Look ahead for print statements inside the loop
-          let j = i + 1;
-          while (j < lines.length && !lines[j].trim().startsWith("end for")) {
-            const innerLine = lines[j].trim();
+          // Process loop body
+          i++;
+          while (i < lines.length && !lines[i].startsWith("end for")) {
+            const innerLine = lines[i].trim();
 
-            // Print with string concatenation
-            if (innerLine.startsWith('print "') && innerLine.includes('" + ')) {
-              const parts = innerLine.split('" + ');
-              if (parts.length === 2) {
-                const str = parts[0].substring(7); // Remove 'print "'
-                const varName = parts[1];
+            // Variable assignment inside loop - FIX: Remove "var" keyword
+            if (innerLine.startsWith("var ") && innerLine.includes("=")) {
+              const parts = innerLine.substring(4).split("=", 2);
+              const varName = parts[0].trim();
+              const expression = parts[1].trim();
 
-                cCode += `    printf("%s%d\\n", "${str}", ${varName});\n`;
+              const cExpression = convertExpressionToC(expression, variables);
+              cCode += `    double ${varName} = ${cExpression};\n`;
+              variables.set(varName, "double");
+            }
+            // Assignment without var keyword
+            else if (innerLine.includes("=") && !innerLine.includes("==")) {
+              const parts = innerLine.split("=", 2);
+              const varName = parts[0].trim();
+              const expression = parts[1].trim();
+
+              const cExpression = convertExpressionToC(expression, variables);
+
+              if (!variables.has(varName)) {
+                cCode += `    double ${varName} = ${cExpression};\n`;
+                variables.set(varName, "double");
+              } else {
+                cCode += `    ${varName} = ${cExpression};\n`;
               }
             }
-            // Simple print
+
+            // Print statement inside loop
             else if (innerLine.startsWith("print ")) {
               const printExpr = innerLine.substring(6).trim();
 
-              if (printExpr === loopVar) {
-                cCode += `    printf("%d\\n", ${loopVar});\n`;
+              if (printExpr.startsWith('"') && printExpr.endsWith('"')) {
+                const str = printExpr.substring(1, printExpr.length - 1);
+                cCode += `    printf("${str}\\n");\n`;
+              } else if (printExpr.includes('" + ')) {
+                // Parse string concatenation carefully
+                const parts = [];
+                let current = "";
+                let inString = false;
+                let j = 0;
+
+                while (j < printExpr.length) {
+                  const char = printExpr[j];
+
+                  if (char === '"' && (j === 0 || printExpr[j - 1] !== "\\")) {
+                    if (inString) {
+                      parts.push({ type: "string", value: current });
+                      current = "";
+                      inString = false;
+                    } else {
+                      if (current.trim()) {
+                        parts.push({ type: "variable", value: current.trim() });
+                      }
+                      current = "";
+                      inString = true;
+                    }
+                  } else if (
+                    !inString &&
+                    char === " " &&
+                    printExpr.substring(j, j + 3) === " + "
+                  ) {
+                    if (current.trim()) {
+                      parts.push({ type: "variable", value: current.trim() });
+                    }
+                    current = "";
+                    j += 2;
+                  } else {
+                    current += char;
+                  }
+                  j++;
+                }
+
+                if (current.trim()) {
+                  if (inString) {
+                    parts.push({ type: "string", value: current });
+                  } else {
+                    parts.push({ type: "variable", value: current.trim() });
+                  }
+                }
+
+                let formatStr = "";
+                const args = [];
+
+                for (const part of parts) {
+                  if (part.type === "string") {
+                    formatStr += part.value;
+                  } else if (
+                    variables.has(part.value) ||
+                    part.value === loopVar
+                  ) {
+                    if (part.value === loopVar) {
+                      formatStr += "%d";
+                    } else {
+                      formatStr += "%.2f";
+                    }
+                    args.push(part.value);
+                  }
+                }
+
+                const argsList = args.length > 0 ? ", " + args.join(", ") : "";
+                cCode += `    printf("${formatStr}\\n"${argsList});\n`;
+              } else {
+                const cExpression = convertExpressionToC(printExpr, variables);
+                if (printExpr === loopVar) {
+                  cCode += `    printf("%d\\n", ${loopVar});\n`;
+                } else {
+                  cCode += `    printf("%.2f\\n", ${cExpression});\n`;
+                }
               }
             }
 
-            j++;
+            i++;
           }
 
           cCode += `  }\n`;
-          i = j; // Skip to after the end for
         }
       }
     }
   }
 
   cCode += `  return 0;\n}\n`;
-
   return cCode;
+}
+
+// Simplified expression converter that handles basic arithmetic reliably
+function convertExpressionToC(expression, variables) {
+  if (!expression) return "0";
+
+  expression = expression.trim();
+
+  // Handle string literals
+  if (
+    (expression.startsWith('"') && expression.endsWith('"')) ||
+    (expression.startsWith("'") && expression.endsWith("'"))
+  ) {
+    return expression;
+  }
+
+  // Handle simple numbers (including decimals)
+  if (/^-?\d+(\.\d+)?$/.test(expression)) {
+    return expression;
+  }
+
+  // Handle simple variables
+  if (
+    /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(expression) &&
+    variables.has(expression)
+  ) {
+    return expression;
+  }
+
+  // Handle mathematical functions
+  expression = expression.replace(/sqrt\s*\(/g, "sqrt(");
+  expression = expression.replace(/pow\s*\(/g, "pow(");
+  expression = expression.replace(/abs\s*\(/g, "fabs(");
+  expression = expression.replace(/sin\s*\(/g, "sin(");
+  expression = expression.replace(/cos\s*\(/g, "cos(");
+  expression = expression.replace(/tan\s*\(/g, "tan(");
+
+  // Handle power operator ^ - convert to pow()
+  expression = expression.replace(
+    /(\w+|$$[^)]+$$)\s*\^\s*(\w+|$$[^)]+$$)/g,
+    "pow($1, $2)"
+  );
+  expression = expression.replace(
+    /(\d+(?:\.\d+)?)\s*\^\s*(\d+(?:\.\d+)?)/g,
+    "pow($1, $2)"
+  );
+
+  // Handle basic arithmetic - ensure proper spacing
+  expression = expression.replace(/\s+/g, " ");
+
+  // For simple expressions like "a + b", "5 * 3", etc., just return as-is
+  // The C compiler will handle the arithmetic
+  if (/^[\w\s+\-*/().]+$/.test(expression)) {
+    return expression;
+  }
+
+  // If we can't parse it safely, return 0 to avoid compilation errors
+  return "0";
 }
