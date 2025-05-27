@@ -12,6 +12,9 @@ export function registerPseudocodeLanguage() {
         // Keywords
         [/\b(if|else|while|for|return|function|var|print|input)\b/, "keyword"],
 
+        // Mathematical functions
+        [/\b(sqrt|pow|abs|sin|cos|tan|log|exp|floor|ceil)\b/, "keyword.math"],
+
         // Control keywords
         [/\b(begin|end|then|do|to|downto|step)\b/, "keyword.control"],
 
@@ -106,6 +109,27 @@ export function registerPseudocodeLanguage() {
             label: "input",
             kind: monaco.languages.CompletionItemKind.Function,
             insertText: "input ${1:variable}",
+            insertTextRules:
+              monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          },
+          {
+            label: "sqrt",
+            kind: monaco.languages.CompletionItemKind.Function,
+            insertText: "sqrt(${1:number})",
+            insertTextRules:
+              monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          },
+          {
+            label: "pow",
+            kind: monaco.languages.CompletionItemKind.Function,
+            insertText: "pow(${1:base}, ${2:exponent})",
+            insertTextRules:
+              monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          },
+          {
+            label: "abs",
+            kind: monaco.languages.CompletionItemKind.Function,
+            insertText: "abs(${1:number})",
             insertTextRules:
               monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
           },
